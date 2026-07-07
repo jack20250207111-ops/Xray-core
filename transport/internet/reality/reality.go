@@ -6,17 +6,18 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/hmac"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	gotls "crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -235,7 +236,7 @@ func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destinati
 					if !first && j == 0 {
 						req.Header.Set("Referer", firstURL)
 					}
-					req.AddCookie(&http.Cookie{Name: "padding", Value: strings.Repeat("0", int(crypto.RandBetween(config.SpiderY[0], config.SpiderY[1])))})
+					req.AddCookie(&http.Cookie{Name: "padding", Value: encryptedPaddingValue(uConn.AuthKey, int(crypto.RandBetween(config.SpiderY[0], config.SpiderY[1])))})
 					if resp, err = client.Do(req); err != nil {
 						break
 					}
@@ -296,4 +297,21 @@ func getPathLocked(paths map[string]struct{}) string {
 		i++
 	}
 	return "/"
+}
+
+func encryptedPaddingValue(authKey []byte, plaintextLength int) string {
+	if plaintextLength < 0 {
+		plaintextLength = 0
+	}
+	aead := crypto.NewAesGcm(authKey)
+	nonce := make([]byte, aead.NonceSize())
+	plaintext := make([]byte, plaintextLength)
+	if _, err := io.ReadFull(crand.Reader, nonce); err != nil {
+		errors.LogWarningInner(context.Background(), err, "REALITY: failed to generate padding nonce")
+	}
+	if _, err := io.ReadFull(crand.Reader, plaintext); err != nil {
+		errors.LogWarningInner(context.Background(), err, "REALITY: failed to generate padding plaintext")
+	}
+	encrypted := aead.Seal(nonce, nonce, plaintext, []byte("REALITY padding"))
+	return base64.RawURLEncoding.EncodeToString(encrypted)
 }
